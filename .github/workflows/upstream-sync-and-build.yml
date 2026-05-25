@@ -281,7 +281,7 @@ jobs:
   #   runs-on: ubuntu-22.04
   #   needs: build
   #   # Only auto-publish on the main feature branch; skip for other branches.
-  #   if: github.ref == 'refs/heads/copilot/add-disable-inline-fill-settings'
+  #   if: github.ref == 'refs/heads/feature/disable-autofill-generate-password'
   #   steps:
   #     - name: Download Chrome artifact
   #       uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -301,7 +301,7 @@ jobs:
   #   name: Publish to Firefox Add-ons (AMO)
   #   runs-on: ubuntu-22.04
   #   needs: build
-  #   if: github.ref == 'refs/heads/copilot/add-disable-inline-fill-settings'
+  #   if: github.ref == 'refs/heads/feature/disable-autofill-generate-password'
   #   steps:
   #     - name: Download Firefox artifact
   #       uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -321,7 +321,7 @@ jobs:
   #   name: Publish to Microsoft Edge Add-ons
   #   runs-on: ubuntu-22.04
   #   needs: build
-  #   if: github.ref == 'refs/heads/copilot/add-disable-inline-fill-settings'
+  #   if: github.ref == 'refs/heads/feature/disable-autofill-generate-password'
   #   steps:
   #     - name: Download Edge artifact
   #       uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
