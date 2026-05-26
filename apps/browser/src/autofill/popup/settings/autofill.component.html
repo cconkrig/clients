@@ -123,11 +123,7 @@
             <bit-label for="inline-menu-password-generator">
               {{ "inlineMenuPasswordGeneratorLabel" | i18n }}
             </bit-label>
-            <bit-select
-              formControlName="behavior"
-              bitInput
-              id="inline-menu-password-generator"
-            >
+            <bit-select formControlName="behavior" bitInput id="inline-menu-password-generator">
               <bit-option
                 *ngFor="let option of inlineMenuPasswordGeneratorOptions"
                 [label]="option.name"

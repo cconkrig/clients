@@ -427,7 +427,9 @@ export class AutofillComponent implements OnInit {
     this.inlineMenuPasswordGeneratorForm.controls.behavior.valueChanges
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe((value) => {
-        void this.autofillSettingsService.setInlineMenuPasswordGeneratorBehavior(value);
+        if (value != null) {
+          void this.autofillSettingsService.setInlineMenuPasswordGeneratorBehavior(value);
+        }
       });
   }
 
