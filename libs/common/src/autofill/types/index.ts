@@ -144,11 +144,14 @@ export type InlineMenuVisibilitySetting =
  * - `DisableWhenSiteExists` — Suppress the popup only when the vault already
  *   contains a saved Login cipher for the current site; still show it for new sites.
  */
-export enum InlineMenuPasswordGeneratorBehavior {
-  Normal = "normal",
-  AlwaysDisable = "alwaysDisable",
-  DisableWhenSiteExists = "disableWhenSiteExists",
-}
+export const InlineMenuPasswordGeneratorBehavior = {
+  Normal: "normal",
+  AlwaysDisable: "alwaysDisable",
+  DisableWhenSiteExists: "disableWhenSiteExists",
+} as const;
+
+export type InlineMenuPasswordGeneratorBehavior =
+  (typeof InlineMenuPasswordGeneratorBehavior)[keyof typeof InlineMenuPasswordGeneratorBehavior];
 
 export type BrowserClientVendor = (typeof BrowserClientVendors)[keyof typeof BrowserClientVendors];
 export type BrowserShortcutsUri = (typeof BrowserShortcutsUris)[keyof typeof BrowserShortcutsUris];

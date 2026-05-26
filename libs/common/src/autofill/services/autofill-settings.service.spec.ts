@@ -17,12 +17,12 @@ import { firstValueFrom } from "rxjs";
 
 import { PolicyService } from "@bitwarden/common/admin-console/abstractions/policy/policy.service.abstraction";
 import { AccountService } from "@bitwarden/common/auth/abstractions/account.service";
+import { Utils } from "@bitwarden/common/platform/misc/utils";
 import {
   FakeAccountService,
   FakeStateProvider,
   mockAccountServiceWith,
 } from "@bitwarden/common/spec";
-import { Utils } from "@bitwarden/common/platform/misc/utils";
 import { UserId } from "@bitwarden/common/types/guid";
 import { RestrictedItemTypesService } from "@bitwarden/common/vault/services/restricted-item-types.service";
 
