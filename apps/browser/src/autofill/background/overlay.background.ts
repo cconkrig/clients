@@ -27,7 +27,10 @@ import {
 } from "@bitwarden/common/autofill/constants";
 import { AutofillSettingsServiceAbstraction } from "@bitwarden/common/autofill/services/autofill-settings.service";
 import { DomainSettingsService } from "@bitwarden/common/autofill/services/domain-settings.service";
-import { InlineMenuVisibilitySetting } from "@bitwarden/common/autofill/types";
+import {
+  InlineMenuPasswordGeneratorBehavior,
+  InlineMenuVisibilitySetting,
+} from "@bitwarden/common/autofill/types";
 import { parseYearMonthExpiry } from "@bitwarden/common/autofill/utils";
 import { NeverDomains } from "@bitwarden/common/models/domain/domain-service";
 import { EnvironmentService } from "@bitwarden/common/platform/abstractions/environment.service";
@@ -3292,6 +3295,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       authStatus,
       isInlineMenuListPort,
       showInlineMenuAccountCreation,
+      port.sender.tab,
     );
 
     const showSaveLoginMenu =
@@ -3404,19 +3408,37 @@ export class OverlayBackground implements OverlayBackgroundInterface {
    * Identifies if the focused field should show the inline menu
    * password generator when the inline menu is opened.
    *
+   * Decision order:
+   *   1. Only the list port (not the button port) displays the generator UI, and
+   *      the vault must be unlocked.
+   *   2. The focused field must be one that logically needs a generated password
+   *      (either a standalone password-generation field, or a password field inside
+   *      an account-creation form).
+   *   3. The user's {@link InlineMenuPasswordGeneratorBehavior} setting is checked:
+   *      - `AlwaysDisable` — return `false` immediately regardless of vault contents.
+   *      - `DisableWhenSiteExists` — query the vault for Login ciphers matching the
+   *        current tab URL; suppress the popup if at least one match is found.
+   *      - `Normal` (default) — no suppression; fall through to pre-generate.
+   *   4. If no credential has been generated yet, one is requested and awaited so
+   *      the popup has a password ready to display on first open.
+   *
    * @param authStatus - The current authentication status
    * @param isInlineMenuListPort - Identifies if the port is for the inline menu list
    * @param showInlineMenuAccountCreation - Identifies if the inline menu account creation should be shown
+   * @param tab - The tab associated with the port connection (used for vault URL lookup)
    */
   private async shouldInitInlineMenuPasswordGenerator(
     authStatus: AuthenticationStatus,
     isInlineMenuListPort: boolean,
     showInlineMenuAccountCreation: boolean,
+    tab?: chrome.tabs.Tab,
   ) {
+    // Only the list port renders the password generator, and the vault must be unlocked.
     if (!isInlineMenuListPort || authStatus !== AuthenticationStatus.Unlocked) {
       return false;
     }
 
+    // Determine if the currently focused field is one that should display the generator.
     const focusFieldShouldShowPasswordGenerator =
       this.focusedFieldMatchesFillType(InlineMenuFillTypes.PasswordGeneration) ||
       (showInlineMenuAccountCreation &&
@@ -3425,12 +3447,41 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       return false;
     }
 
+    // Check the user's password generator behavior setting.
+    const behavior = await firstValueFrom(
+      this.autofillSettingsService.inlineMenuPasswordGeneratorBehavior$,
+    );
+
+    if (behavior === InlineMenuPasswordGeneratorBehavior.AlwaysDisable) {
+      return false;
+    }
+
+    if (behavior === InlineMenuPasswordGeneratorBehavior.DisableWhenSiteExists && tab?.url) {
+      const activeUserId = await firstValueFrom(
+        this.accountService.activeAccount$.pipe(getOptionalUserId),
+      );
+      if (activeUserId) {
+        const ciphersForSite = await this.cipherService.getAllDecryptedForUrl(
+          tab.url,
+          activeUserId,
+        );
+        // Only Login ciphers are relevant — card/identity entries do not hold site passwords.
+        const hasLoginCipherForSite = ciphersForSite.some(
+          (cipher) => cipher.type === CipherType.Login,
+        );
+        if (hasLoginCipherForSite) {
+          return false;
+        }
+      }
+    }
+
     const { capabilities } = await firstValueFrom(
       this.generatorService.preferredAlgorithm$("password", {
         account$: this.accountService.activeAccount$.pipe(filter((a): a is Account => a !== null)),
       }),
     );
 
+    // Pre-generate a password so the popup can display one immediately on first open.
     if (!this.credential$.value && capabilities.autogenerate) {
       this.requestGeneratedPassword$.next({
         source: PasswordGenerateRequestSource.InlineMenuInit,

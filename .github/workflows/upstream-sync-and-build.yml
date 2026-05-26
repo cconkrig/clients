@@ -1,0 +1,344 @@
+# upstream-sync-and-build.yml
+#
+# PURPOSE
+# -------
+# This workflow keeps our fork up-to-date with the upstream Bitwarden clients
+# repository (https://github.com/bitwarden/clients) and produces browser-extension
+# artifacts that are ready for submission to the Chrome Web Store, Firefox
+# Add-ons (AMO), Edge Add-ons, and Opera Add-ons stores.
+#
+# SCHEDULE
+# --------
+# Runs automatically once per day at 00:00 UTC so that upstream security fixes
+# and dependency updates are incorporated promptly.  The workflow can also be
+# triggered manually via the GitHub Actions UI for on-demand releases.
+#
+# HOW IT WORKS
+# ------------
+# 1. Check out the fork's feature branch (the branch that carries our changes).
+# 2. Fetch `main` from upstream (bitwarden/clients).
+# 3. Attempt a non-fast-forward merge of upstream/main into our branch so that
+#    the upstream commits land *underneath* our commits — preserving the diff.
+#    If the merge has conflicts the job fails and a summary is printed so a
+#    developer can resolve them manually.
+# 4. If changes were integrated, push the merged branch back to origin.
+# 5. Build every browser-extension target and upload the resulting ZIP files
+#    as GitHub Actions artifacts, ready for store submission.
+#
+# STORE SUBMISSION
+# ----------------
+# Automatic publishing to the extension stores requires additional secrets and
+# is intentionally left as a manual step.  Placeholders are provided below for
+# each store.  To enable auto-publishing, add the required credentials as
+# repository secrets and un-comment the corresponding "Publish" steps.
+#
+# Required secrets (add in Settings → Secrets → Actions):
+#   Chrome Web Store  : CHROME_EXTENSION_ID, CHROME_CLIENT_ID,
+#                       CHROME_CLIENT_SECRET, CHROME_REFRESH_TOKEN
+#   Firefox AMO       : FIREFOX_EXTENSION_ID, FIREFOX_API_KEY, FIREFOX_API_SECRET
+#   Edge Add-ons      : EDGE_PRODUCT_ID, EDGE_CLIENT_ID, EDGE_CLIENT_SECRET,
+#                       EDGE_ACCESS_TOKEN_URL
+#   Opera Add-ons     : (manual submission via https://addons.opera.com/developer)
+
+name: Sync Upstream and Build Browser Extensions
+
+on:
+  # Run automatically every day at midnight UTC.
+  schedule:
+    - cron: "0 0 * * *"
+
+  # Allow a developer to kick off the workflow manually, optionally targeting a
+  # specific upstream branch (defaults to main).
+  workflow_dispatch:
+    inputs:
+      upstream_branch:
+        description: "Upstream branch to merge from bitwarden/clients"
+        required: false
+        default: "main"
+        type: string
+
+defaults:
+  run:
+    shell: bash
+
+# Only one instance of this workflow should run at a time per branch to avoid
+# parallel pushes racing each other.
+concurrency:
+  group: upstream-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # Needed to push the merged branch back to origin.
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 1 — SYNC UPSTREAM
+  # Merge the latest upstream main into our feature branch.
+  # ──────────────────────────────────────────────────────────────────────────
+  sync-upstream:
+    name: Sync from upstream bitwarden/clients
+    runs-on: ubuntu-22.04
+    outputs:
+      # Set to "true" when upstream had new commits that were merged in so that
+      # the build job knows whether fresh artifacts are needed.
+      changes_merged: ${{ steps.merge.outputs.changes_merged }}
+      node_version: ${{ steps.node-version.outputs.node_version }}
+
+    steps:
+      - name: Check out fork branch (full history required for merge)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Check out the branch that carries our feature commits.
+          ref: ${{ github.ref }}
+          # Use the built-in token; it has write access within this repository.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # A full clone is required so that the merge has access to the entire
+          # commit graph and can compute merge-bases correctly.
+          fetch-depth: 0
+
+      - name: Read Node version from .nvmrc
+        id: node-version
+        run: |
+          NODE_NVMRC=$(cat .nvmrc)
+          echo "node_version=${NODE_NVMRC/v/''}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure Git identity for merge commits
+        run: |
+          git config user.name  "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/bitwarden/clients.git
+
+      - name: Fetch upstream branch
+        run: |
+          UPSTREAM_BRANCH="${{ inputs.upstream_branch || 'main' }}"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+          echo "Fetched upstream/${UPSTREAM_BRANCH}"
+
+      - name: Check whether upstream has new commits
+        id: check-changes
+        run: |
+          UPSTREAM_BRANCH="${{ inputs.upstream_branch || 'main' }}"
+          LOCAL_SHA=$(git rev-parse HEAD)
+          UPSTREAM_SHA=$(git rev-parse "upstream/${UPSTREAM_BRANCH}")
+
+          echo "Local  HEAD : ${LOCAL_SHA}"
+          echo "Upstream HEAD : ${UPSTREAM_SHA}"
+
+          # Determine if upstream has commits that are not already an ancestor of HEAD.
+          if git merge-base --is-ancestor "${UPSTREAM_SHA}" HEAD; then
+            echo "No new upstream commits — nothing to merge."
+            echo "has_new_commits=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Upstream has new commits that need to be merged."
+            echo "has_new_commits=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Merge upstream changes into our branch
+        id: merge
+        if: steps.check-changes.outputs.has_new_commits == 'true'
+        run: |
+          UPSTREAM_BRANCH="${{ inputs.upstream_branch || 'main' }}"
+
+          # --no-ff ensures a merge commit is always created, making the history
+          # easy to audit.  The message records which upstream SHA was merged.
+          UPSTREAM_SHA="${{ steps.check-changes.outputs.upstream_sha }}"
+          git merge "upstream/${UPSTREAM_BRANCH}" \
+            --no-ff \
+            --no-edit \
+            -m "chore: sync upstream bitwarden/clients ${UPSTREAM_BRANCH} @ ${UPSTREAM_SHA}"
+
+          echo "changes_merged=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set changes_merged=false when nothing was merged
+        if: steps.check-changes.outputs.has_new_commits != 'true'
+        run: echo "changes_merged=false" >> "$GITHUB_OUTPUT"
+
+      - name: Push merged branch back to origin
+        if: steps.merge.outputs.changes_merged == 'true'
+        run: git push origin HEAD
+
+      - name: Summary
+        run: |
+          if [[ "${{ steps.merge.outputs.changes_merged }}" == "true" ]]; then
+            echo "### ✅ Upstream sync complete" >> "$GITHUB_STEP_SUMMARY"
+            echo "Merged upstream bitwarden/clients @ \`${{ steps.check-changes.outputs.upstream_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ℹ️ Already up to date" >> "$GITHUB_STEP_SUMMARY"
+            echo "No new commits in upstream bitwarden/clients." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 2 — BUILD
+  # Build browser extensions for Chrome, Firefox, Edge, and Opera.
+  # Runs regardless of whether there were upstream changes, so that a manual
+  # workflow_dispatch always produces fresh artifacts.
+  # ──────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build browser extensions
+    runs-on: ubuntu-22.04
+    needs: sync-upstream
+    env:
+      _NODE_VERSION: ${{ needs.sync-upstream.outputs.node_version }}
+
+    steps:
+      - name: Check out repository (post-merge state)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Always check out the latest state of the branch (which now includes
+          # the upstream merge commit if one was produced).
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - name: Set up Node ${{ env._NODE_VERSION }}
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: ${{ env._NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: "**/package-lock.json"
+
+      - name: Print environment
+        run: |
+          node --version
+          npm --version
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      # ── Chrome (Manifest V3 — Chrome Web Store) ──────────────────────────
+      - name: Build Chrome extension (MV3)
+        run: npm run dist:chrome
+        working-directory: apps/browser
+
+      - name: Upload Chrome artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: chrome-mv3-${{ github.sha }}
+          path: apps/browser/dist/dist-chrome.zip
+          if-no-files-found: error
+
+      # ── Firefox (Manifest V2 — Firefox Add-ons / AMO) ────────────────────
+      # Note: Firefox production still uses Manifest V2.  Use dist:firefox:mv3
+      # only for testing the MV3 variant (it is not accepted on AMO yet).
+      - name: Build Firefox extension (MV2)
+        run: npm run dist:firefox
+        working-directory: apps/browser
+
+      - name: Upload Firefox artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: firefox-mv2-${{ github.sha }}
+          path: apps/browser/dist/dist-firefox.zip
+          if-no-files-found: error
+
+      # ── Edge (Manifest V3 — Microsoft Edge Add-ons) ──────────────────────
+      - name: Build Edge extension (MV3)
+        run: npm run dist:edge
+        working-directory: apps/browser
+
+      - name: Upload Edge artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: edge-mv3-${{ github.sha }}
+          path: apps/browser/dist/dist-edge.zip
+          if-no-files-found: error
+
+      # ── Opera (Manifest V3 — Opera Add-ons) ──────────────────────────────
+      - name: Build Opera extension (MV3)
+        run: npm run dist:opera:mv3
+        working-directory: apps/browser
+
+      - name: Upload Opera artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: opera-mv3-${{ github.sha }}
+          path: apps/browser/dist/dist-opera.zip
+          if-no-files-found: error
+
+      - name: Build summary
+        run: |
+          echo "### 📦 Browser extension artifacts" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Store | Artifact | Manifest |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|----------|----------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Chrome Web Store | \`chrome-mv3-${{ github.sha }}\` | MV3 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Firefox Add-ons (AMO) | \`firefox-mv2-${{ github.sha }}\` | MV2 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Microsoft Edge Add-ons | \`edge-mv3-${{ github.sha }}\` | MV3 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Opera Add-ons | \`opera-mv3-${{ github.sha }}\` | MV3 |" >> "$GITHUB_STEP_SUMMARY"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 3 — PUBLISH (DISABLED — requires store credentials)
+  #
+  # Un-comment and configure the steps below once the required secrets have
+  # been added to the repository (Settings → Secrets and variables → Actions).
+  # ──────────────────────────────────────────────────────────────────────────
+
+  # publish-chrome:
+  #   name: Publish to Chrome Web Store
+  #   runs-on: ubuntu-22.04
+  #   needs: build
+  #   # Only auto-publish on the main feature branch; skip for other branches.
+  #   if: github.ref == 'refs/heads/feature/disable-autofill-generate-password'
+  #   steps:
+  #     - name: Download Chrome artifact
+  #       uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+  #       with:
+  #         name: chrome-mv3-${{ github.sha }}
+  #
+  #     - name: Publish to Chrome Web Store
+  #       uses: mnao305/chrome-extension-upload@v5.0.0
+  #       with:
+  #         file-path: dist-chrome.zip
+  #         extension-id: ${{ secrets.CHROME_EXTENSION_ID }}
+  #         client-id: ${{ secrets.CHROME_CLIENT_ID }}
+  #         client-secret: ${{ secrets.CHROME_CLIENT_SECRET }}
+  #         refresh-token: ${{ secrets.CHROME_REFRESH_TOKEN }}
+
+  # publish-firefox:
+  #   name: Publish to Firefox Add-ons (AMO)
+  #   runs-on: ubuntu-22.04
+  #   needs: build
+  #   if: github.ref == 'refs/heads/feature/disable-autofill-generate-password'
+  #   steps:
+  #     - name: Download Firefox artifact
+  #       uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+  #       with:
+  #         name: firefox-mv2-${{ github.sha }}
+  #
+  #     - name: Sign and submit to AMO
+  #       run: |
+  #         npx web-ext sign \
+  #           --source-dir . \
+  #           --artifacts-dir ./signed \
+  #           --api-key "${{ secrets.FIREFOX_API_KEY }}" \
+  #           --api-secret "${{ secrets.FIREFOX_API_SECRET }}" \
+  #           --id "${{ secrets.FIREFOX_EXTENSION_ID }}"
+
+  # publish-edge:
+  #   name: Publish to Microsoft Edge Add-ons
+  #   runs-on: ubuntu-22.04
+  #   needs: build
+  #   if: github.ref == 'refs/heads/feature/disable-autofill-generate-password'
+  #   steps:
+  #     - name: Download Edge artifact
+  #       uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+  #       with:
+  #         name: edge-mv3-${{ github.sha }}
+  #
+  #     - name: Publish to Edge Add-ons store
+  #       # See https://learn.microsoft.com/en-us/microsoft-edge/extensions-chromium/publish/api/using-addons-api
+  #       run: |
+  #         ACCESS_TOKEN=$(curl -s -X POST "${{ secrets.EDGE_ACCESS_TOKEN_URL }}" \
+  #           -d "client_id=${{ secrets.EDGE_CLIENT_ID }}" \
+  #           -d "client_secret=${{ secrets.EDGE_CLIENT_SECRET }}" \
+  #           -d "grant_type=client_credentials" \
+  #           -d "scope=https://api.addons.microsoftedge.microsoft.com/.default" \
+  #           | jq -r .access_token)
+  #         curl -s -X POST \
+  #           "https://api.addons.microsoftedge.microsoft.com/v1/products/${{ secrets.EDGE_PRODUCT_ID }}/submissions/draft/package" \
+  #           -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  #           -H "Content-Type: application/zip" \
+  #           --data-binary @dist-edge.zip

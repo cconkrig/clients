@@ -14,7 +14,10 @@ import {
   DefaultDomainSettingsService,
   DomainSettingsService,
 } from "@bitwarden/common/autofill/services/domain-settings.service";
-import { InlineMenuVisibilitySetting } from "@bitwarden/common/autofill/types";
+import {
+  InlineMenuPasswordGeneratorBehavior,
+  InlineMenuVisibilitySetting,
+} from "@bitwarden/common/autofill/types";
 import { NeverDomains } from "@bitwarden/common/models/domain/domain-service";
 import { ConfigService } from "@bitwarden/common/platform/abstractions/config/config.service";
 import {
@@ -105,6 +108,8 @@ describe("OverlayBackground", () => {
   let environmentService: MockProxy<EnvironmentService>;
   let inlineMenuVisibilityMock$: BehaviorSubject<InlineMenuVisibilitySetting>;
   let autofillSettingsService: MockProxy<AutofillSettingsService>;
+  /** Mock observable for the inline menu password generator behavior setting. */
+  let inlineMenuPasswordGeneratorBehaviorMock$: BehaviorSubject<InlineMenuPasswordGeneratorBehavior>;
   let i18nService: MockProxy<I18nService>;
   let platformUtilsService: MockProxy<BrowserPlatformUtilsService>;
   let enablePasskeysMock$: BehaviorSubject<boolean>;
@@ -207,6 +212,11 @@ describe("OverlayBackground", () => {
     inlineMenuVisibilityMock$ = new BehaviorSubject(AutofillOverlayVisibility.OnFieldFocus);
     autofillSettingsService = mock<AutofillSettingsService>();
     autofillSettingsService.inlineMenuVisibility$ = inlineMenuVisibilityMock$;
+    inlineMenuPasswordGeneratorBehaviorMock$ = new BehaviorSubject(
+      InlineMenuPasswordGeneratorBehavior.Normal,
+    );
+    autofillSettingsService.inlineMenuPasswordGeneratorBehavior$ =
+      inlineMenuPasswordGeneratorBehaviorMock$;
     i18nService = mock<I18nService>();
     platformUtilsService = mock<BrowserPlatformUtilsService>();
     enablePasskeysMock$ = new BehaviorSubject(true);
@@ -3891,6 +3901,83 @@ describe("OverlayBackground", () => {
       await flushPromises();
 
       expect(generatorService.generate$).toHaveBeenCalled();
+    });
+
+    describe("shouldInitInlineMenuPasswordGenerator — behavior setting", () => {
+      const passwordFieldData = createFocusedFieldDataMock({
+        inlineMenuFillType: CipherType.Login,
+        accountCreationFieldType: InlineMenuAccountCreationFieldType.Password,
+      });
+      const senderWithTab = mock<chrome.runtime.MessageSender>({
+        tab: createChromeTabMock({ id: 1, url: "https://jest-testing-website.com" }),
+        frameId: 0,
+      });
+
+      beforeEach(() => {
+        activeAccountStatusMock$.next(AuthenticationStatus.Unlocked);
+        sendMockExtensionMessage(
+          { command: "updateFocusedFieldData", focusedFieldData: passwordFieldData },
+          senderWithTab,
+        );
+      });
+
+      it("does NOT generate a password when behavior is AlwaysDisable", async () => {
+        inlineMenuPasswordGeneratorBehaviorMock$.next(
+          InlineMenuPasswordGeneratorBehavior.AlwaysDisable,
+        );
+
+        await initOverlayElementPorts();
+        await flushPromises();
+
+        expect(generatorService.generate$).not.toHaveBeenCalled();
+      });
+
+      it("does NOT generate a password when behavior is DisableWhenSiteExists and a Login cipher exists for the site", async () => {
+        inlineMenuPasswordGeneratorBehaviorMock$.next(
+          InlineMenuPasswordGeneratorBehavior.DisableWhenSiteExists,
+        );
+        const loginCipher = mock<CipherView>({ type: CipherType.Login });
+        cipherService.getAllDecryptedForUrl.mockResolvedValue([loginCipher]);
+
+        await initOverlayElementPorts();
+        await flushPromises();
+
+        expect(generatorService.generate$).not.toHaveBeenCalled();
+      });
+
+      it("DOES generate a password when behavior is DisableWhenSiteExists but no Login cipher exists for the site", async () => {
+        inlineMenuPasswordGeneratorBehaviorMock$.next(
+          InlineMenuPasswordGeneratorBehavior.DisableWhenSiteExists,
+        );
+        cipherService.getAllDecryptedForUrl.mockResolvedValue([]);
+
+        await initOverlayElementPorts();
+        await flushPromises();
+
+        expect(generatorService.generate$).toHaveBeenCalled();
+      });
+
+      it("DOES generate a password when the only vault ciphers for the site are non-Login types (e.g. Card)", async () => {
+        inlineMenuPasswordGeneratorBehaviorMock$.next(
+          InlineMenuPasswordGeneratorBehavior.DisableWhenSiteExists,
+        );
+        const cardCipher = mock<CipherView>({ type: CipherType.Card });
+        cipherService.getAllDecryptedForUrl.mockResolvedValue([cardCipher]);
+
+        await initOverlayElementPorts();
+        await flushPromises();
+
+        expect(generatorService.generate$).toHaveBeenCalled();
+      });
+
+      it("DOES generate a password when behavior is Normal (default)", async () => {
+        inlineMenuPasswordGeneratorBehaviorMock$.next(InlineMenuPasswordGeneratorBehavior.Normal);
+
+        await initOverlayElementPorts();
+        await flushPromises();
+
+        expect(generatorService.generate$).toHaveBeenCalled();
+      });
     });
   });
 

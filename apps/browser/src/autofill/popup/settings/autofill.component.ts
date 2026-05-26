@@ -33,6 +33,7 @@ import {
   BrowserShortcutsUri,
   ClearClipboardDelaySetting,
   DisablePasswordManagerUri,
+  InlineMenuPasswordGeneratorBehavior,
   InlineMenuVisibilitySetting,
 } from "@bitwarden/common/autofill/types";
 import { FeatureFlag } from "@bitwarden/common/enums/feature-flag.enum";
@@ -144,6 +145,17 @@ export class AutofillComponent implements OnInit {
     defaultUriMatch: new FormControl(),
   });
 
+  protected inlineMenuPasswordGeneratorForm = new FormGroup({
+    behavior: new FormControl<InlineMenuPasswordGeneratorBehavior>(
+      InlineMenuPasswordGeneratorBehavior.Normal,
+    ),
+  });
+
+  protected inlineMenuPasswordGeneratorOptions: {
+    name: string;
+    value: InlineMenuPasswordGeneratorBehavior;
+  }[];
+
   protected isDefaultUriMatchDisabledByPolicy = false;
 
   advancedOptionWarningMap: Partial<Record<UriMatchStrategySetting, string>>;
@@ -208,6 +220,21 @@ export class AutofillComponent implements OnInit {
       [UriMatchStrategy.StartsWith]: "startsWithAdvancedOptionWarning",
       [UriMatchStrategy.RegularExpression]: "regExAdvancedOptionWarning",
     };
+
+    this.inlineMenuPasswordGeneratorOptions = [
+      {
+        name: i18nService.t("inlineMenuPasswordGeneratorNormal"),
+        value: InlineMenuPasswordGeneratorBehavior.Normal,
+      },
+      {
+        name: i18nService.t("inlineMenuPasswordGeneratorAlwaysDisable"),
+        value: InlineMenuPasswordGeneratorBehavior.AlwaysDisable,
+      },
+      {
+        name: i18nService.t("inlineMenuPasswordGeneratorDisableWhenSiteExists"),
+        value: InlineMenuPasswordGeneratorBehavior.DisableWhenSiteExists,
+      },
+    ];
 
     this.browserClientVendor = BrowserApi.getBrowserClientVendor(window);
     this.disablePasswordManagerURI = DisablePasswordManagerUris[this.browserClientVendor];
@@ -389,6 +416,21 @@ export class AutofillComponent implements OnInit {
       // Mark as dismissed in storage (so it won't show on future visits)
       await this.autofillSettingsService.setClipboardSettingUpdatedNotificationDismissed(true);
     }
+
+    // Inline menu password generator behavior
+    const behavior = await firstValueFrom(
+      this.autofillSettingsService.inlineMenuPasswordGeneratorBehavior$,
+    );
+    this.inlineMenuPasswordGeneratorForm.controls.behavior.patchValue(behavior, {
+      emitEvent: false,
+    });
+    this.inlineMenuPasswordGeneratorForm.controls.behavior.valueChanges
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe((value) => {
+        if (value != null) {
+          void this.autofillSettingsService.setInlineMenuPasswordGeneratorBehavior(value);
+        }
+      });
   }
 
   get browserClientVendorExtended() {

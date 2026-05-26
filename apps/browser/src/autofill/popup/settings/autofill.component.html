@@ -118,6 +118,23 @@
             {{ "showInlineMenuOnIconSelectionLabel" | i18n }}
           </bit-label>
         </bit-form-control>
+        <form [formGroup]="inlineMenuPasswordGeneratorForm">
+          <bit-form-field *ngIf="enableInlineMenu" class="tw-ml-5" disableMargin>
+            <bit-label for="inline-menu-password-generator">
+              {{ "inlineMenuPasswordGeneratorLabel" | i18n }}
+            </bit-label>
+            <bit-select formControlName="behavior" bitInput id="inline-menu-password-generator">
+              <bit-option
+                *ngFor="let option of inlineMenuPasswordGeneratorOptions"
+                [label]="option.name"
+                [value]="option.value"
+              ></bit-option>
+            </bit-select>
+            <bit-hint class="tw-text-sm">
+              {{ "inlineMenuPasswordGeneratorDesc" | i18n }}
+            </bit-hint>
+          </bit-form-field>
+        </form>
         <bit-form-control *ngIf="canOverrideBrowserAutofillSetting">
           <input
             bitCheckbox
